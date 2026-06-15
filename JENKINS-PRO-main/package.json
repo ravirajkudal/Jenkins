@@ -1,8 +1,0 @@
-{
-  "name": "jenkins-sample-app",
-  "version": "1.0.0",
-  "scripts": {
-    "test:unit": "echo 'Running Unit Tests... Passed!'",
-    "test:integration": "echo 'Running Integration Tests... Passed!'"
-  }
-}
