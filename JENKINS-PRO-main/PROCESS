@@ -1,0 +1,232 @@
+Project: CI/CD on Jenkins using pipelines
+Phase 0: Installation & Setup
+
+1. Install Docker (if not installed)
+Ubuntu/Debian
+sudo apt update
+sudo apt install docker.io -y
+sudo systemctl start docker
+sudo systemctl enable docker
+
+Verify:
+docker --version
+
+ 2. Run Jenkins using Docker (Updated Command)
+docker rm -f jenkins
+
+docker run -d \
+ --name jenkins \
+ -p 8080:8080 \
+ -p 50000:50000 \
+ -v jenkins_home:/var/jenkins_home \
+ jenkins/jenkins:lts
+
+Check running container:
+docker ps
+
+If Docker permissions fail:
+sudo usermod -aG docker $USER 
+newgrp docker
+
+
+ 3. Get Initial Admin Password
+docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+
+PHASE-2:
+2. Install Required Jenkins Plugins Go to Manage Jenkins -> Plugins -> Available plugins, and install:
+Pipeline (usually installed by default)
+GitHub Integration Plugin
+NodeJS Plugin (to build our sample app)
+
+Credentials Binding Plugin
+3. Configure NodeJS in Jenkins Go to Manage Jenkins -> Tools. Scroll down to NodeJS installations, click Add NodeJS, name it Node18, select version 18.x, and save.
+
+Important:
+The tool name configured in Jenkins must EXACTLY match the name used inside the Jenkinsfile.
+Example:
+If Jenkins Tool Configuration uses:
+Node18
+Then the Jenkinsfile must also use:
+nodejs 'Node18'
+Even a small mismatch like "node-18" vs "Node18" will cause the pipeline to fail.
+
+Phase 2: GitHub Repository & Sample App
+1. Create the App Create a new directory locally and add these three files:
+mkdir jenkins-advanced-pipeline
+cd jenkins-advanced-pipeline
+package.json:
+JSON
+{
+  "name": "jenkins-sample-app",
+  "version": "1.0.0",
+  "scripts": {
+    "test:unit": "echo 'Running Unit Tests... Passed!'",
+    "test:integration": "echo 'Running Integration Tests... Passed!'"
+  }
+}
+
+app.js:
+JavaScript
+console.log("Hello, Jenkins Pipeline!");
+
+2. Push to GitHub Create a new repository on GitHub (e.g., jenkins-advanced-pipeline), then push your code:
+Bash
+git init
+git add .
+git commit -m "Initial commit"
+git branch -M main
+git remote add origin https://github.com/YOUR_USER/jenkins-advanced-pipeline.git
+git push -u origin main
+
+
+Phase 3: The Advanced Jenkinsfile
+Create a file named Jenkinsfile in the root of your project, commit it, and push it to GitHub. This pipeline covers all your requested syntax.
+Groovy
+pipeline {
+    agent any
+    
+    // Tools required for the build
+    tools {
+        nodejs 'Node18' // Matches the name configured in Manage Jenkins -> Tools
+    }
+
+    // Parameters to trigger manual builds with options
+    parameters {
+        choice(name: 'DEPLOY_ENV', choices: ['dev', 'staging', 'prod'], description: 'Select deployment environment')
+        booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Uncheck to skip tests')
+    }
+
+    // Global Environment variables
+    environment {
+        APP_NAME = "MySampleApp"
+        // Dummy credentials mapping
+        DEPLOY_TOKEN = credentials('dummy-deploy-token') 
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                echo "Building ${APP_NAME} for ${params.DEPLOY_ENV} environment..."
+                sh 'npm install'
+            }
+        }
+
+        stage('Test') {
+            // 'when' condition based on the parameter
+            when {
+                expression { params.RUN_TESTS == true }
+            }
+            // Parallel execution to speed up pipelines
+            parallel {
+                stage('Unit Tests') {
+                    steps {
+                        echo "Running Unit Tests..."
+                        sh 'npm run test:unit'
+                    }
+                }
+                stage('Integration Tests') {
+                    steps {
+                        echo "Running Integration Tests..."
+                        sh 'npm run test:integration'
+                    }
+                }
+            }
+        }
+
+        stage('Deploy') {
+            // 'when' condition based on branch and parameter
+            when {
+                branch 'main'
+                environment name: 'DEPLOY_ENV', value: 'prod'
+            }
+            steps {
+                echo "Deploying to Production securely..."
+                // Masking credentials in logs while using them
+                sh '''
+                    echo "Connecting to server using token: ${DEPLOY_TOKEN}"
+                    echo "Starting node server..."
+                    node app.js > app.log 2>&1 &
+                '''
+            }
+        }
+    }
+
+    // Post-build actions based on pipeline status
+    post {
+        always {
+            echo "Pipeline execution finished. Cleaning up workspace..."
+            cleanWs() // Cleans the workspace
+        }
+        success {
+            echo "SUCCESS: The pipeline ran flawlessly!"
+        }
+        failure {
+            echo "FAILURE: Something went wrong. Check the logs."
+        }
+    }
+}
+
+
+Phase 4: Jenkins UI Configuration & Webhook
+
+1. Create the Dummy Credentials Before creating the job, Jenkins needs the credential referenced in the Jenkinsfile.
+Go to Manage Jenkins -> Credentials -> System -> Global credentials.
+Click Add Credentials.
+Kind: Secret text.
+Secret: super-secret-token-123.
+ID: dummy-deploy-token (Must match the ID in the Jenkinsfile exactly).
+Save.
+
+2. Create the Pipeline Job
+Click New Item on the Jenkins dashboard.
+Name it Advanced-Node-Pipeline, select Pipeline, and click OK.
+Under the General tab, check This project is parameterized (Jenkins will populate this automatically after the first run, but it's good to note).
+Under Build Triggers, check GitHub hook trigger for GITScm polling.
+Scroll down to the Pipeline section:
+Definition: Pipeline script from SCM
+SCM: Git
+Repository URL: https://github.com/YOUR_USER/jenkins-advanced-pipeline.git
+Branch Specifier: */main
+Script Path: Jenkinsfile
+Save.
+
+3. Configure GitHub Webhook
+Go to your GitHub repository -> Settings -> Webhooks -> Add webhook.
+sudo snap install ngrok
+Create ngrok account
+Go here:
+ https://dashboard.ngrok.com/signup
+Get your authtoken
+After login, go to:
+  https://dashboard.ngrok.com/get-started/your-authtoken
+Payload URL: http://<YOUR_JENKINS_PUBLIC_IP_OR_NGROK>:8080/github-webhook/ (Note: If Jenkins is on localhost, GitHub can't reach it. You must use a tool like ngrok (ngrok http 8080) to expose it to the internet temporarily).
+Important:
+The URL MUST end with a trailing slash (/).
+Without the final slash, some Jenkins versions may return a 404 error and the webhook will fail.
+Content type: application/json.
+Events: Send me everything (or just push events).
+Save.
+
+Phase 5: Execution & Observation
+Trigger Manually: Click Build with Parameters in the Jenkins UI. Change DEPLOY_ENV to prod to see the deploy stage run, or uncheck RUN_TESTS to see the test stage skipped.
+Trigger via Webhook: Make a change to app.js, commit, and push to GitHub. Watch Jenkins automatically start a new build.
+Observe: Click on the Build number in the history, then click Console Output to read the logs. You will see the ${DEPLOY_TOKEN} is masked with ** in the logs.This prevents sensitive credentials from being exposed in build logs.
+Concept Check:
+Question:
+In the Deploy stage, we used:
+
+when {
+    branch 'main'
+}
+
+What would happen if a developer pushed code to a branch called feature-login?
+Would the Deploy stage run?
+Why is this important for protecting the production environment?
+
+
+
+Phase 6: Debugging Tips
+"No such DSL method" Error: This usually means you are using syntax for a plugin that isn't installed. Double-check your plugin manager.
+Webhook Not Triggering: Go to GitHub Webhook settings and look at the Recent Deliveries tab at the bottom. It will show you exactly what HTTP error Jenkins returned (e.g., 403 Forbidden means Jenkins security is blocking it, or a 500/timeout means Jenkins is unreachable).
+Pipeline Syntax Generator: If you are unsure how to write a step (like calling an AWS API or checking out code), use the Jenkins Snippet Generator. Click Pipeline Syntax on the left menu of your job. Select a step from the dropdown, fill out the UI, and it will generate the exact Groovy code for your Jenkinsfile.
+Replay Feature: If a pipeline fails, don't trigger a whole new build. Click on the failed build and click Replay. You can edit the Jenkinsfile script directly in the UI just for that run to quickly test a fix without committing to Git.
